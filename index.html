@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>3D 2048 Prototype</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="game-panel" aria-label="3D 2048 game">
+        <div class="top-bar">
+          <div>
+            <h1>3D 2048</h1>
+            <p>4 x 4 x 4 cube / six-way slide</p>
+          </div>
+          <div class="stats" aria-label="score panel">
+            <div>
+              <span>Score</span>
+              <strong id="score">0</strong>
+            </div>
+            <div>
+              <span>Best</span>
+              <strong id="best">0</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="stage-wrap">
+          <canvas id="scene" aria-label="3D board"></canvas>
+          <div id="message" class="message" hidden>
+            <strong id="message-title">Game Over</strong>
+            <span id="message-body">No moves remain.</span>
+          </div>
+        </div>
+
+        <div class="controls" aria-label="move controls">
+          <button type="button" data-dir="y+">↑</button>
+          <div class="control-row">
+            <button type="button" data-dir="x-">←</button>
+            <button type="button" data-dir="z+">奥</button>
+            <button type="button" data-dir="z-">手前</button>
+            <button type="button" data-dir="x+">→</button>
+          </div>
+          <button type="button" data-dir="y-">↓</button>
+        </div>
+
+        <div class="actions">
+          <button id="new-game" type="button">New Game</button>
+          <button id="undo-view" type="button">View Reset</button>
+        </div>
+      </section>
+
+      <aside class="side-panel">
+        <section>
+          <h2>Controls</h2>
+          <dl>
+            <div><dt>W / ↑</dt><dd>上へ</dd></div>
+            <div><dt>S / ↓</dt><dd>下へ</dd></div>
+            <div><dt>A / ←</dt><dd>左へ</dd></div>
+            <div><dt>D / →</dt><dd>右へ</dd></div>
+            <div><dt>Q</dt><dd>奥へ</dd></div>
+            <div><dt>E</dt><dd>手前へ</dd></div>
+          </dl>
+        </section>
+        <section>
+          <h2>Roadmap</h2>
+          <ul>
+            <li>一人用の完成度を上げる</li>
+            <li>連鎖・同時合体を攻撃力に変換</li>
+            <li>時間で消えるお邪魔ブロックを追加</li>
+            <li>CPUとオンライン対戦を分離して実装</li>
+          </ul>
+        </section>
+        <section>
+          <h2>Publish</h2>
+          <p>静的サイトなので、初期公開は GitHub Pages / Cloudflare Pages / Netlify の無料枠が向いています。</p>
+        </section>
+      </aside>
+    </main>
+
+    <script type="module" src="./game.js"></script>
+  </body>
+</html>
