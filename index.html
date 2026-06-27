@@ -3,16 +3,16 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>3D 2048 Prototype</title>
+    <title>3D 2048 Battle Prototype</title>
     <link rel="stylesheet" href="./styles.css">
   </head>
   <body>
     <main class="app-shell">
-      <section class="game-panel" aria-label="3D 2048 game">
+      <section class="game-panel" aria-label="3D 2048 battle game">
         <div class="top-bar">
           <div>
-            <h1>3D 2048</h1>
-            <p>4 x 4 x 4 cube / six-way slide</p>
+            <h1>3D 2048 Battle</h1>
+            <p id="mode-caption">Solo practice / 4 x 4 x 4 cube</p>
           </div>
           <div class="stats" aria-label="score panel">
             <div>
@@ -23,30 +23,55 @@
               <span>Best</span>
               <strong id="best">0</strong>
             </div>
+            <div>
+              <span>Attack</span>
+              <strong id="attack">0</strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="mode-bar" aria-label="battle mode">
+          <button class="mode-button is-active" type="button" data-mode="solo">Solo</button>
+          <button class="mode-button" type="button" data-mode="cpu">CPU</button>
+          <button class="mode-button" type="button" data-mode="friend">Friend</button>
+        </div>
+
+        <div class="battle-strip" aria-label="battle status">
+          <div class="player-card is-active" data-player-card="0">
+            <span id="p1-label">Player</span>
+            <strong id="p1-score">0</strong>
+            <small id="p1-garbage">Garbage 0</small>
+          </div>
+          <div class="versus">VS</div>
+          <div class="player-card" data-player-card="1">
+            <span id="p2-label">Opponent</span>
+            <strong id="p2-score">0</strong>
+            <small id="p2-garbage">Garbage 0</small>
           </div>
         </div>
 
         <div class="stage-wrap">
           <canvas id="scene" aria-label="3D board"></canvas>
           <div id="message" class="message" hidden>
-            <strong id="message-title">Game Over</strong>
-            <span id="message-body">No moves remain.</span>
+            <strong id="message-title">Ready</strong>
+            <span id="message-body">Choose a direction.</span>
           </div>
         </div>
 
         <div class="controls" aria-label="move controls">
-          <button type="button" data-dir="y+">↑</button>
+          <button type="button" data-dir="y+">Up</button>
           <div class="control-row">
-            <button type="button" data-dir="x-">←</button>
-            <button type="button" data-dir="z+">奥</button>
-            <button type="button" data-dir="z-">手前</button>
-            <button type="button" data-dir="x+">→</button>
+            <button type="button" data-dir="x-">Left</button>
+            <button type="button" data-dir="z+">Back</button>
+            <button type="button" data-dir="z-">Front</button>
+            <button type="button" data-dir="x+">Right</button>
           </div>
-          <button type="button" data-dir="y-">↓</button>
+          <button type="button" data-dir="y-">Down</button>
         </div>
 
         <div class="actions">
           <button id="new-game" type="button">New Game</button>
+          <button id="add-garbage" type="button">Test Garbage</button>
           <button id="undo-view" type="button">View Reset</button>
         </div>
       </section>
@@ -55,26 +80,26 @@
         <section>
           <h2>Controls</h2>
           <dl>
-            <div><dt>W / ↑</dt><dd>上へ</dd></div>
-            <div><dt>S / ↓</dt><dd>下へ</dd></div>
-            <div><dt>A / ←</dt><dd>左へ</dd></div>
-            <div><dt>D / →</dt><dd>右へ</dd></div>
-            <div><dt>Q</dt><dd>奥へ</dd></div>
-            <div><dt>E</dt><dd>手前へ</dd></div>
+            <div><dt>W / Up</dt><dd>Move up</dd></div>
+            <div><dt>S / Down</dt><dd>Move down</dd></div>
+            <div><dt>A / Left</dt><dd>Move left</dd></div>
+            <div><dt>D / Right</dt><dd>Move right</dd></div>
+            <div><dt>Q</dt><dd>Move back</dd></div>
+            <div><dt>E</dt><dd>Move front</dd></div>
           </dl>
         </section>
         <section>
-          <h2>Roadmap</h2>
+          <h2>Battle Rules</h2>
           <ul>
-            <li>一人用の完成度を上げる</li>
-            <li>連鎖・同時合体を攻撃力に変換</li>
-            <li>時間で消えるお邪魔ブロックを追加</li>
-            <li>CPUとオンライン対戦を分離して実装</li>
+            <li>Multiple merges in one move increase attack power.</li>
+            <li>Attack power becomes black garbage blocks on the opponent board.</li>
+            <li>Garbage cannot merge and fades out as its timer runs down.</li>
+            <li>CPU is a practice opponent. Friend mode alternates turns on one device.</li>
           </ul>
         </section>
         <section>
-          <h2>Publish</h2>
-          <p>静的サイトなので、初期公開は GitHub Pages / Cloudflare Pages / Netlify の無料枠が向いています。</p>
+          <h2>Friend Battle</h2>
+          <p>This is the local battle foundation. Online friend matches can reuse the P1/P2 board state and synchronize it over WebSocket later.</p>
         </section>
       </aside>
     </main>

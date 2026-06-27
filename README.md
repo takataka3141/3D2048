@@ -65,3 +65,11 @@ python -m http.server 8000
 - `game.js`: 盤面ロジックとThree.js描画
 
 今は一人用の盤面処理と描画を同じファイルに置いています。対戦を入れる段階で、盤面ロジック、入力、描画、対戦同期を分割すると拡張しやすくなります。
+
+## Current battle prototype
+
+- `Solo`: normal practice mode.
+- `CPU`: the player moves, then a simple evaluation AI chooses the CPU move.
+- `Friend`: local pass-and-play battle. P1 and P2 alternate turns on one device.
+- Garbage blocks are black, cannot merge, show a remaining-seconds label, and fade out until they disappear.
+- Multiple merges in one move create attack power. In battle modes, attack power adds garbage blocks to the opponent board.

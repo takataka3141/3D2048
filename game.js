@@ -2,6 +2,9 @@ import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 
 const SIZE = 4;
 const START_TILES = 3;
+const GARBAGE_DURATION_MS = 14000;
+const CPU_DELAY_MS = 420;
+const DIRECTIONS = ["x+", "x-", "y+", "y-", "z+", "z-"];
 const COLORS = new Map([
   [2, "#d9f2e8"],
   [4, "#c8e8ff"],
@@ -19,15 +22,25 @@ const COLORS = new Map([
 const canvas = document.querySelector("#scene");
 const scoreEl = document.querySelector("#score");
 const bestEl = document.querySelector("#best");
+const attackEl = document.querySelector("#attack");
 const message = document.querySelector("#message");
 const messageTitle = document.querySelector("#message-title");
 const messageBody = document.querySelector("#message-body");
+const modeCaption = document.querySelector("#mode-caption");
+const p1Label = document.querySelector("#p1-label");
+const p2Label = document.querySelector("#p2-label");
+const p1Score = document.querySelector("#p1-score");
+const p2Score = document.querySelector("#p2-score");
+const p1Garbage = document.querySelector("#p1-garbage");
+const p2Garbage = document.querySelector("#p2-garbage");
 
 const state = {
-  grid: createGrid(),
-  score: 0,
+  mode: "solo",
+  activePlayer: 0,
+  players: [makePlayer("Player"), makePlayer("Opponent")],
   best: Number(localStorage.getItem("3d2048-best") || 0),
-  moving: false
+  busy: false,
+  lastAttack: 0
 };
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
@@ -46,26 +59,57 @@ key.position.set(5, 8, 7);
 scene.add(key);
 
 const tileMeshes = new Map();
-let animationId = 0;
 
 initBoard();
 newGame();
 bindEvents();
 resize();
 animate();
+setInterval(tickGarbage, 250);
+
+function makePlayer(name) {
+  return {
+    name,
+    grid: createGrid(),
+    score: 0,
+    alive: true
+  };
+}
 
 function createGrid() {
   return Array.from({ length: SIZE }, () =>
-    Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => 0))
+    Array.from({ length: SIZE }, () => Array.from({ length: SIZE }, () => null))
   );
 }
 
+function makeTileCell(value) {
+  return { kind: "tile", value };
+}
+
+function makeGarbageCell() {
+  const now = Date.now();
+  return {
+    kind: "garbage",
+    value: 0,
+    createdAt: now,
+    expiresAt: now + GARBAGE_DURATION_MS,
+    duration: GARBAGE_DURATION_MS
+  };
+}
+
 function newGame() {
-  state.grid = createGrid();
-  state.score = 0;
-  state.moving = false;
+  state.players = [
+    makePlayer(state.mode === "friend" ? "P1" : "Player"),
+    makePlayer(state.mode === "cpu" ? "CPU" : "P2")
+  ];
+  state.activePlayer = 0;
+  state.busy = false;
+  state.lastAttack = 0;
   message.hidden = true;
-  for (let i = 0; i < START_TILES; i += 1) addRandomTile();
+  for (const player of state.players) {
+    for (let i = 0; i < START_TILES; i += 1) addRandomTile(player);
+  }
+  updateModeText();
   updateStats();
   renderTiles(true);
 }
@@ -74,9 +118,7 @@ function initBoard() {
   const lineMaterial = new THREE.LineBasicMaterial({ color: 0x50606d, transparent: true, opacity: 0.72 });
   const box = new THREE.BoxGeometry(SIZE, SIZE, SIZE);
   const edges = new THREE.EdgesGeometry(box);
-  const wire = new THREE.LineSegments(edges, lineMaterial);
-  wire.position.set(0, 0, 0);
-  board.add(wire);
+  board.add(new THREE.LineSegments(edges, lineMaterial));
 
   const cellMaterial = new THREE.LineBasicMaterial({ color: 0x2d3844, transparent: true, opacity: 0.45 });
   for (let i = 1; i < SIZE; i += 1) {
@@ -118,11 +160,23 @@ function bindEvents() {
   document.querySelectorAll("[data-dir]").forEach((button) => {
     button.addEventListener("click", () => move(button.dataset.dir));
   });
-  document.querySelector("#new-game").addEventListener("click", newGame);
-  document.querySelector("#undo-view").addEventListener("click", () => {
-    camera.position.set(5.6, 5.2, 6.8);
-    camera.lookAt(0, 0, 0);
+  document.querySelectorAll("[data-mode]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.mode = button.dataset.mode;
+      document.querySelectorAll("[data-mode]").forEach((modeButton) => {
+        modeButton.classList.toggle("is-active", modeButton === button);
+      });
+      newGame();
+    });
   });
+  document.querySelector("#new-game").addEventListener("click", newGame);
+  document.querySelector("#add-garbage").addEventListener("click", () => {
+    addGarbage(state.players[state.activePlayer], 3);
+    showNotice("Garbage test", "Added 3 garbage blocks to the active board.");
+    updateStats();
+    renderTiles();
+  });
+  document.querySelector("#undo-view").addEventListener("click", resetView);
   addEventListener("keydown", (event) => {
     const keys = {
       ArrowUp: "y+",
@@ -150,23 +204,95 @@ function bindEvents() {
   addEventListener("resize", resize);
 }
 
-function move(direction) {
-  if (state.moving) return;
-  const result = slideGrid(state.grid, direction);
+function resetView() {
+  camera.position.set(5.6, 5.2, 6.8);
+  camera.lookAt(0, 0, 0);
+}
+
+function move(direction, options = {}) {
+  if (state.busy && !options.force) return false;
+  const playerIndex = options.playerIndex ?? state.activePlayer;
+  const player = state.players[playerIndex];
+  expireGarbage(player);
+  const result = slideGrid(player.grid, direction);
   if (!result.changed) {
-    showNotice("Move blocked", "その方向には動かせません。");
+    if (!options.silent) showNotice("Move blocked", "No tiles can move in that direction.");
+    return false;
+  }
+
+  player.grid = result.grid;
+  player.score += result.score;
+  state.best = Math.max(state.best, player.score);
+  state.lastAttack = calculateAttack(result);
+  localStorage.setItem("3d2048-best", String(state.best));
+  addRandomTile(player);
+  sendAttack(playerIndex, state.lastAttack);
+  message.hidden = true;
+
+  if (!hasMove(player)) {
+    player.alive = false;
+    showNotice("Game Over", `${player.name} has no legal moves.`);
+  }
+
+  afterMove(playerIndex);
+  return true;
+}
+
+function afterMove(playerIndex) {
+  updateStats();
+  if (playerIndex === state.activePlayer) renderTiles();
+
+  if (state.mode === "friend") {
+    state.activePlayer = state.activePlayer === 0 ? 1 : 0;
+    showNotice("Turn change", `${state.players[state.activePlayer].name}'s turn.`);
+    updateStats();
+    renderTiles();
     return;
   }
-  state.grid = result.grid;
-  state.score += result.score;
-  state.best = Math.max(state.best, state.score);
-  localStorage.setItem("3d2048-best", String(state.best));
-  addRandomTile();
+
+  if (state.mode === "cpu" && playerIndex === 0) {
+    state.busy = true;
+    setTimeout(cpuTurn, CPU_DELAY_MS);
+  }
+}
+
+function cpuTurn() {
+  const cpu = state.players[1];
+  expireGarbage(cpu);
+  const direction = chooseCpuDirection(cpu);
+  if (direction) {
+    move(direction, { playerIndex: 1, silent: true, force: true });
+  }
+  state.busy = false;
   updateStats();
-  message.hidden = true;
   renderTiles();
-  if (!hasMove()) {
-    showNotice("Game Over", "動かせる方向がなくなりました。");
+}
+
+function chooseCpuDirection(player) {
+  let best = null;
+  for (const direction of DIRECTIONS) {
+    const result = slideGrid(player.grid, direction);
+    if (!result.changed) continue;
+    const emptyCount = countEmpty(result.grid);
+    const value = result.score * 3 + result.merges * 20 + emptyCount;
+    if (!best || value > best.value) best = { direction, value };
+  }
+  return best?.direction ?? null;
+}
+
+function calculateAttack(result) {
+  if (!result.merges) return 0;
+  const comboBonus = Math.max(0, result.merges - 1);
+  const valueBonus = Math.floor(result.score / 64);
+  return Math.min(8, 1 + comboBonus + valueBonus);
+}
+
+function sendAttack(playerIndex, amount) {
+  if (!amount || state.mode === "solo") return;
+  const target = state.players[playerIndex === 0 ? 1 : 0];
+  addGarbage(target, amount);
+  if (playerIndex === state.activePlayer) {
+    showNotice("Attack", `Sent ${amount} garbage blocks.`);
   }
 }
 
@@ -174,29 +300,49 @@ function slideGrid(grid, direction) {
   const next = createGrid();
   let changed = false;
   let score = 0;
+  let merges = 0;
   const lines = getLines(direction);
 
   for (const line of lines) {
-    const values = line.map(([x, y, z]) => grid[x][y][z]).filter(Boolean);
+    const pieces = line.map(([x, y, z]) => grid[x][y][z]).filter(Boolean);
     const merged = [];
-    for (let i = 0; i < values.length; i += 1) {
-      if (values[i] === values[i + 1]) {
-        const value = values[i] * 2;
-        merged.push(value);
+    for (let i = 0; i < pieces.length; i += 1) {
+      const current = cloneCell(pieces[i]);
+      const nextPiece = pieces[i + 1];
+      if (
+        current.kind === "tile" &&
+        nextPiece?.kind === "tile" &&
+        current.value === nextPiece.value
+      ) {
+        const value = current.value * 2;
+        merged.push(makeTileCell(value));
         score += value;
+        merges += 1;
         i += 1;
       } else {
-        merged.push(values[i]);
+        merged.push(current);
       }
     }
-    while (merged.length < SIZE) merged.push(0);
+    while (merged.length < SIZE) merged.push(null);
     line.forEach(([x, y, z], index) => {
       next[x][y][z] = merged[index];
-      if (next[x][y][z] !== grid[x][y][z]) changed = true;
+      if (!sameCell(next[x][y][z], grid[x][y][z])) changed = true;
     });
   }
 
-  return { grid: next, changed, score };
+  return { grid: next, changed, score, merges };
+}
+
+function cloneCell(cell) {
+  return cell ? { ...cell } : null;
+}
+
+function sameCell(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "tile") return a.value === b.value;
+  return a.expiresAt === b.expiresAt;
 }
 
 function getLines(direction) {
@@ -228,77 +374,164 @@ function range(start, end) {
   return values;
 }
 
-function addRandomTile() {
-  const empty = [];
-  forEachCell((x, y, z, value) => {
-    if (!value) empty.push([x, y, z]);
-  });
+function addRandomTile(player) {
+  const empty = emptyCells(player.grid);
   if (!empty.length) return;
   const [x, y, z] = empty[Math.floor(Math.random() * empty.length)];
-  state.grid[x][y][z] = Math.random() < 0.9 ? 2 : 4;
+  player.grid[x][y][z] = makeTileCell(Math.random() < 0.9 ? 2 : 4);
 }
 
-function hasMove() {
-  for (const direction of ["x+", "x-", "y+", "y-", "z+", "z-"]) {
-    if (slideGrid(state.grid, direction).changed) return true;
+function addGarbage(player, amount) {
+  const empty = emptyCells(player.grid);
+  const count = Math.min(amount, empty.length);
+  for (let i = 0; i < count; i += 1) {
+    const index = Math.floor(Math.random() * empty.length);
+    const [x, y, z] = empty.splice(index, 1)[0];
+    player.grid[x][y][z] = makeGarbageCell();
+  }
+}
+
+function emptyCells(grid) {
+  const empty = [];
+  forEachGridCell(grid, (x, y, z, cell) => {
+    if (!cell) empty.push([x, y, z]);
+  });
+  return empty;
+}
+
+function countEmpty(grid) {
+  return emptyCells(grid).length;
+}
+
+function countGarbage(player) {
+  let count = 0;
+  forEachGridCell(player.grid, (x, y, z, cell) => {
+    if (cell?.kind === "garbage") count += 1;
+  });
+  return count;
+}
+
+function hasMove(player) {
+  expireGarbage(player);
+  for (const direction of DIRECTIONS) {
+    if (slideGrid(player.grid, direction).changed) return true;
   }
   return false;
 }
 
-function forEachCell(callback) {
+function tickGarbage() {
+  let changed = false;
+  for (const player of state.players) changed = expireGarbage(player) || changed;
+  if (changed) {
+    updateStats();
+    renderTiles();
+  } else {
+    updateGarbageLabels();
+  }
+}
+
+function expireGarbage(player) {
+  const now = Date.now();
+  let changed = false;
+  forEachGridCell(player.grid, (x, y, z, cell) => {
+    if (cell?.kind === "garbage" && cell.expiresAt <= now) {
+      player.grid[x][y][z] = null;
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function forEachGridCell(grid, callback) {
   for (let x = 0; x < SIZE; x += 1) {
     for (let y = 0; y < SIZE; y += 1) {
       for (let z = 0; z < SIZE; z += 1) {
-        callback(x, y, z, state.grid[x][y][z]);
+        callback(x, y, z, grid[x][y][z]);
       }
     }
   }
 }
 
 function renderTiles(immediate = false) {
+  const player = state.players[state.activePlayer];
   const seen = new Set();
-  forEachCell((x, y, z, value) => {
-    if (!value) return;
+  forEachGridCell(player.grid, (x, y, z, cell) => {
+    if (!cell) return;
     const key = `${x}-${y}-${z}`;
     seen.add(key);
     let mesh = tileMeshes.get(key);
     if (!mesh) {
-      mesh = makeTile(value);
+      mesh = makeTile(cell);
       mesh.scale.setScalar(immediate ? 1 : 0.1);
       tileGroup.add(mesh);
       tileMeshes.set(key, mesh);
     }
-    if (mesh.userData.value !== value) updateTileLabel(mesh, value);
-    mesh.userData.value = value;
-    mesh.material.color.set(COLORS.get(value) || "#ffffff");
+    updateMeshForCell(mesh, cell);
     mesh.position.copy(cellToWorld(x, y, z));
   });
 
   for (const [key, mesh] of tileMeshes.entries()) {
     if (!seen.has(key)) {
-      tileGroup.remove(mesh);
-      mesh.geometry.dispose();
-      mesh.material.dispose();
-      disposeLabel(mesh.children[0]);
+      disposeTile(mesh);
       tileMeshes.delete(key);
     }
   }
 }
 
-function makeTile(value) {
+function makeTile(cell) {
   const geometry = new THREE.BoxGeometry(0.78, 0.78, 0.78);
   const material = new THREE.MeshStandardMaterial({
-    color: COLORS.get(value) || "#ffffff",
+    color: "#ffffff",
     roughness: 0.42,
-    metalness: 0.08
+    metalness: 0.08,
+    transparent: true,
+    opacity: 1
   });
   const mesh = new THREE.Mesh(geometry, material);
-  mesh.add(makeLabel(value));
+  updateMeshForCell(mesh, cell);
   return mesh;
 }
 
-function makeLabel(value) {
-  const texture = new THREE.CanvasTexture(drawLabel(value));
+function updateMeshForCell(mesh, cell) {
+  const labelText = getCellLabel(cell);
+  const signature = `${cell.kind}:${cell.value}:${labelText}`;
+  if (mesh.userData.signature !== signature) {
+    updateTileLabel(mesh, labelText, cell);
+    mesh.userData.signature = signature;
+  }
+
+  if (cell.kind === "garbage") {
+    const ratio = garbageRatio(cell);
+    mesh.material.color.set("#050608");
+    mesh.material.opacity = 0.22 + ratio * 0.68;
+    mesh.material.emissive.set("#000000");
+  } else {
+    mesh.material.color.set(COLORS.get(cell.value) || "#ffffff");
+    mesh.material.opacity = 1;
+    mesh.material.emissive.set("#000000");
+  }
+}
+
+function updateGarbageLabels() {
+  const player = state.players[state.activePlayer];
+  forEachGridCell(player.grid, (x, y, z, cell) => {
+    if (!cell || cell.kind !== "garbage") return;
+    const mesh = tileMeshes.get(`${x}-${y}-${z}`);
+    if (mesh) updateMeshForCell(mesh, cell);
+  });
+}
+
+function getCellLabel(cell) {
+  if (cell.kind === "garbage") return String(Math.max(1, Math.ceil((cell.expiresAt - Date.now()) / 1000)));
+  return String(cell.value);
+}
+
+function garbageRatio(cell) {
+  return Math.max(0, Math.min(1, (cell.expiresAt - Date.now()) / cell.duration));
+}
+
+function makeLabel(text, cell) {
+  const texture = new THREE.CanvasTexture(drawLabel(text, cell));
   texture.colorSpace = THREE.SRGBColorSpace;
   const material = new THREE.SpriteMaterial({ map: texture, transparent: true });
   const sprite = new THREE.Sprite(material);
@@ -307,11 +540,18 @@ function makeLabel(value) {
   return sprite;
 }
 
-function updateTileLabel(mesh, value) {
+function updateTileLabel(mesh, text, cell) {
   const oldLabel = mesh.children[0];
   disposeLabel(oldLabel);
   if (oldLabel) mesh.remove(oldLabel);
-  mesh.add(makeLabel(value));
+  mesh.add(makeLabel(text, cell));
+}
+
+function disposeTile(mesh) {
+  tileGroup.remove(mesh);
+  mesh.geometry.dispose();
+  mesh.material.dispose();
+  disposeLabel(mesh.children[0]);
 }
 
 function disposeLabel(label) {
@@ -320,17 +560,17 @@ function disposeLabel(label) {
   label.material.dispose();
 }
 
-function drawLabel(value) {
+function drawLabel(text, cell) {
   const labelCanvas = document.createElement("canvas");
   labelCanvas.width = 256;
   labelCanvas.height = 128;
   const ctx = labelCanvas.getContext("2d");
   ctx.clearRect(0, 0, 256, 128);
-  ctx.fillStyle = value < 8 ? "#15202a" : "#ffffff";
-  ctx.font = "800 58px Segoe UI, sans-serif";
+  ctx.fillStyle = cell.kind === "garbage" || cell.value >= 8 ? "#ffffff" : "#15202a";
+  ctx.font = `800 ${text.length >= 4 ? 48 : 58}px Segoe UI, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(String(value), 128, 64);
+  ctx.fillText(text, 128, 64);
   return labelCanvas;
 }
 
@@ -338,9 +578,29 @@ function cellToWorld(x, y, z) {
   return new THREE.Vector3(x - 1.5, y - 1.5, z - 1.5);
 }
 
+function updateModeText() {
+  const captions = {
+    solo: "Solo practice / 4 x 4 x 4 cube",
+    cpu: "CPU practice battle / attacks send garbage",
+    friend: "Friend battle / pass the turn after each move"
+  };
+  modeCaption.textContent = captions[state.mode];
+  p1Label.textContent = state.mode === "friend" ? "P1" : "Player";
+  p2Label.textContent = state.mode === "cpu" ? "CPU" : state.mode === "friend" ? "P2" : "Opponent";
+}
+
 function updateStats() {
-  scoreEl.textContent = state.score.toLocaleString();
+  const current = state.players[state.activePlayer];
+  scoreEl.textContent = current.score.toLocaleString();
   bestEl.textContent = state.best.toLocaleString();
+  attackEl.textContent = state.lastAttack.toLocaleString();
+  p1Score.textContent = state.players[0].score.toLocaleString();
+  p2Score.textContent = state.players[1].score.toLocaleString();
+  p1Garbage.textContent = `Garbage ${countGarbage(state.players[0])}`;
+  p2Garbage.textContent = `Garbage ${countGarbage(state.players[1])}`;
+  document.querySelectorAll("[data-player-card]").forEach((card) => {
+    card.classList.toggle("is-active", Number(card.dataset.playerCard) === state.activePlayer);
+  });
 }
 
 function showNotice(title, body) {
@@ -357,7 +617,7 @@ function resize() {
 }
 
 function animate() {
-  animationId = requestAnimationFrame(animate);
+  requestAnimationFrame(animate);
   tileGroup.children.forEach((mesh) => {
     if (mesh.scale.x < 1) {
       const next = Math.min(1, mesh.scale.x + 0.08);
