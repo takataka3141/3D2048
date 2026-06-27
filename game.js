@@ -3,7 +3,8 @@ import * as THREE from "https://unpkg.com/three@0.165.0/build/three.module.js";
 const SIZE = 4;
 const START_TILES = 3;
 const GARBAGE_DURATION_MS = 14000;
-const CPU_DELAY_MS = 420;
+const MATCH_DURATION_MS = 120000;
+const CPU_INTERVAL_MS = 850;
 const DIRECTIONS = ["x+", "x-", "y+", "y-", "z+", "z-"];
 const COLORS = new Map([
   [2, "#d9f2e8"],
@@ -19,59 +20,48 @@ const COLORS = new Map([
   [2048, "#f7f7ff"]
 ]);
 
-const canvas = document.querySelector("#scene");
-const scoreEl = document.querySelector("#score");
-const bestEl = document.querySelector("#best");
-const attackEl = document.querySelector("#attack");
-const message = document.querySelector("#message");
-const messageTitle = document.querySelector("#message-title");
-const messageBody = document.querySelector("#message-body");
-const modeCaption = document.querySelector("#mode-caption");
-const p1Label = document.querySelector("#p1-label");
-const p2Label = document.querySelector("#p2-label");
-const p1Score = document.querySelector("#p1-score");
-const p2Score = document.querySelector("#p2-score");
-const p1Garbage = document.querySelector("#p1-garbage");
-const p2Garbage = document.querySelector("#p2-garbage");
+const ui = {
+  best: document.querySelector("#best"),
+  timer: document.querySelector("#timer"),
+  rule: document.querySelector("#rule"),
+  caption: document.querySelector("#mode-caption"),
+  message: document.querySelector("#message"),
+  messageTitle: document.querySelector("#message-title"),
+  messageBody: document.querySelector("#message-body"),
+  labels: [document.querySelector("#p1-label"), document.querySelector("#p2-label")],
+  scores: [document.querySelector("#p1-score"), document.querySelector("#p2-score")],
+  attacks: [document.querySelector("#p1-attack"), document.querySelector("#p2-attack")],
+  garbage: [document.querySelector("#p1-garbage"), document.querySelector("#p2-garbage")]
+};
 
 const state = {
   mode: "solo",
-  activePlayer: 0,
+  rule: "ko",
   players: [makePlayer("Player"), makePlayer("Opponent")],
+  boards: [],
   best: Number(localStorage.getItem("3d2048-best") || 0),
-  busy: false,
-  lastAttack: 0
+  matchStartedAt: Date.now(),
+  matchOver: false,
+  cpuTimer: null
 };
 
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+state.boards = [
+  createBoard(document.querySelector("#scene-p1"), 0),
+  createBoard(document.querySelector("#scene-p2"), 1)
+];
 
-const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
-const board = new THREE.Group();
-const tileGroup = new THREE.Group();
-scene.add(board, tileGroup);
-
-const ambient = new THREE.HemisphereLight(0xffffff, 0x223344, 2.4);
-scene.add(ambient);
-const key = new THREE.DirectionalLight(0xffffff, 2.2);
-key.position.set(5, 8, 7);
-scene.add(key);
-
-const tileMeshes = new Map();
-
-initBoard();
 newGame();
 bindEvents();
 resize();
 animate();
-setInterval(tickGarbage, 250);
+setInterval(tick, 250);
 
 function makePlayer(name) {
   return {
     name,
     grid: createGrid(),
     score: 0,
+    lastAttack: 0,
     alive: true
   };
 }
@@ -97,42 +87,52 @@ function makeGarbageCell() {
   };
 }
 
-function newGame() {
-  state.players = [
-    makePlayer(state.mode === "friend" ? "P1" : "Player"),
-    makePlayer(state.mode === "cpu" ? "CPU" : "P2")
-  ];
-  state.activePlayer = 0;
-  state.busy = false;
-  state.lastAttack = 0;
-  message.hidden = true;
-  for (const player of state.players) {
-    for (let i = 0; i < START_TILES; i += 1) addRandomTile(player);
-  }
-  updateModeText();
-  updateStats();
-  renderTiles(true);
+function createBoard(canvas, index) {
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+  const boardGroup = new THREE.Group();
+  const tileGroup = new THREE.Group();
+  scene.add(boardGroup, tileGroup);
+
+  const ambient = new THREE.HemisphereLight(0xffffff, 0x223344, 2.4);
+  scene.add(ambient);
+  const key = new THREE.DirectionalLight(0xffffff, 2.2);
+  key.position.set(5, 8, 7);
+  scene.add(key);
+
+  initBoardFrame(boardGroup);
+  resetCamera(camera);
+
+  return {
+    canvas,
+    index,
+    renderer,
+    scene,
+    camera,
+    boardGroup,
+    tileGroup,
+    tileMeshes: new Map()
+  };
 }
 
-function initBoard() {
+function initBoardFrame(boardGroup) {
   const lineMaterial = new THREE.LineBasicMaterial({ color: 0x50606d, transparent: true, opacity: 0.72 });
   const box = new THREE.BoxGeometry(SIZE, SIZE, SIZE);
-  const edges = new THREE.EdgesGeometry(box);
-  board.add(new THREE.LineSegments(edges, lineMaterial));
+  boardGroup.add(new THREE.LineSegments(new THREE.EdgesGeometry(box), lineMaterial));
 
   const cellMaterial = new THREE.LineBasicMaterial({ color: 0x2d3844, transparent: true, opacity: 0.45 });
   for (let i = 1; i < SIZE; i += 1) {
     const offset = i - SIZE / 2;
-    addPlaneGrid("x", offset, cellMaterial);
-    addPlaneGrid("y", offset, cellMaterial);
-    addPlaneGrid("z", offset, cellMaterial);
+    addPlaneGrid(boardGroup, "x", offset, cellMaterial);
+    addPlaneGrid(boardGroup, "y", offset, cellMaterial);
+    addPlaneGrid(boardGroup, "z", offset, cellMaterial);
   }
-
-  camera.position.set(5.6, 5.2, 6.8);
-  camera.lookAt(0, 0, 0);
 }
 
-function addPlaneGrid(axis, offset, material) {
+function addPlaneGrid(boardGroup, axis, offset, material) {
   const points = [];
   const min = -SIZE / 2;
   const max = SIZE / 2;
@@ -152,13 +152,37 @@ function addPlaneGrid(axis, offset, material) {
     points.push(new THREE.Vector3(min, min, offset), new THREE.Vector3(min, max, offset));
     points.push(new THREE.Vector3(max, min, offset), new THREE.Vector3(max, max, offset));
   }
-  const geometry = new THREE.BufferGeometry().setFromPoints(points);
-  board.add(new THREE.LineSegments(geometry, material));
+  boardGroup.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(points), material));
+}
+
+function resetCamera(camera) {
+  camera.position.set(5.6, 5.2, 6.8);
+  camera.lookAt(0, 0, 0);
+}
+
+function newGame() {
+  clearCpuTimer();
+  state.players = [
+    makePlayer("Player"),
+    makePlayer(state.mode === "cpu" ? "CPU" : "P2")
+  ];
+  state.matchStartedAt = Date.now();
+  state.matchOver = false;
+  ui.message.hidden = true;
+
+  for (const player of state.players) {
+    for (let i = 0; i < START_TILES; i += 1) addRandomTile(player);
+  }
+
+  updateModeText();
+  updateStats();
+  renderAllBoards(true);
+  if (state.mode === "cpu") startCpuTimer();
 }
 
 function bindEvents() {
   document.querySelectorAll("[data-dir]").forEach((button) => {
-    button.addEventListener("click", () => move(button.dataset.dir));
+    button.addEventListener("click", () => move(0, button.dataset.dir));
   });
   document.querySelectorAll("[data-mode]").forEach((button) => {
     button.addEventListener("click", () => {
@@ -169,103 +193,112 @@ function bindEvents() {
       newGame();
     });
   });
+  document.querySelectorAll("[data-rule]").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.rule = button.dataset.rule;
+      document.querySelectorAll("[data-rule]").forEach((ruleButton) => {
+        ruleButton.classList.toggle("is-active", ruleButton === button);
+      });
+      updateStats();
+    });
+  });
   document.querySelector("#new-game").addEventListener("click", newGame);
   document.querySelector("#add-garbage").addEventListener("click", () => {
-    addGarbage(state.players[state.activePlayer], 3);
-    showNotice("Garbage test", "Added 3 garbage blocks to the active board.");
+    addGarbage(state.players[0], 3);
+    showNotice("Garbage test", "Added 3 garbage blocks to the player board.");
     updateStats();
-    renderTiles();
+    renderAllBoards();
   });
-  document.querySelector("#undo-view").addEventListener("click", resetView);
-  addEventListener("keydown", (event) => {
-    const keys = {
-      ArrowUp: "y+",
-      w: "y+",
-      W: "y+",
-      ArrowDown: "y-",
-      s: "y-",
-      S: "y-",
-      ArrowLeft: "x-",
-      a: "x-",
-      A: "x-",
-      ArrowRight: "x+",
-      d: "x+",
-      D: "x+",
-      q: "z+",
-      Q: "z+",
-      e: "z-",
-      E: "z-"
-    };
-    if (keys[event.key]) {
-      event.preventDefault();
-      move(keys[event.key]);
-    }
+  document.querySelector("#undo-view").addEventListener("click", () => {
+    for (const board of state.boards) resetCamera(board.camera);
   });
+  addEventListener("keydown", handleKeydown);
   addEventListener("resize", resize);
 }
 
-function resetView() {
-  camera.position.set(5.6, 5.2, 6.8);
-  camera.lookAt(0, 0, 0);
+function handleKeydown(event) {
+  const playerOneKeys = {
+    ArrowUp: "y+",
+    w: "y+",
+    W: "y+",
+    ArrowDown: "y-",
+    s: "y-",
+    S: "y-",
+    ArrowLeft: "x-",
+    a: "x-",
+    A: "x-",
+    ArrowRight: "x+",
+    d: "x+",
+    D: "x+",
+    q: "z+",
+    Q: "z+",
+    e: "z-",
+    E: "z-"
+  };
+  const playerTwoKeys = {
+    i: "y+",
+    I: "y+",
+    k: "y-",
+    K: "y-",
+    j: "x-",
+    J: "x-",
+    l: "x+",
+    L: "x+",
+    u: "z+",
+    U: "z+",
+    o: "z-",
+    O: "z-"
+  };
+  if (playerOneKeys[event.key]) {
+    event.preventDefault();
+    move(0, playerOneKeys[event.key]);
+  } else if (state.mode === "friend" && playerTwoKeys[event.key]) {
+    event.preventDefault();
+    move(1, playerTwoKeys[event.key]);
+  }
 }
 
-function move(direction, options = {}) {
-  if (state.busy && !options.force) return false;
-  const playerIndex = options.playerIndex ?? state.activePlayer;
+function startCpuTimer() {
+  clearCpuTimer();
+  state.cpuTimer = setInterval(() => {
+    if (state.mode !== "cpu" || state.matchOver) return;
+    const direction = chooseCpuDirection(state.players[1]);
+    if (direction) move(1, direction, { silent: true });
+  }, CPU_INTERVAL_MS);
+}
+
+function clearCpuTimer() {
+  if (!state.cpuTimer) return;
+  clearInterval(state.cpuTimer);
+  state.cpuTimer = null;
+}
+
+function move(playerIndex, direction, options = {}) {
+  if (state.matchOver) return false;
+  if (state.mode === "solo" && playerIndex !== 0) return false;
+  if (state.mode === "cpu" && playerIndex === 1 && !options.silent) return false;
+
   const player = state.players[playerIndex];
   expireGarbage(player);
   const result = slideGrid(player.grid, direction);
   if (!result.changed) {
-    if (!options.silent) showNotice("Move blocked", "No tiles can move in that direction.");
+    if (!options.silent && playerIndex === 0) showNotice("Move blocked", "No tiles can move in that direction.");
     return false;
   }
 
   player.grid = result.grid;
   player.score += result.score;
+  player.lastAttack = calculateAttack(result);
   state.best = Math.max(state.best, player.score);
-  state.lastAttack = calculateAttack(result);
   localStorage.setItem("3d2048-best", String(state.best));
   addRandomTile(player);
-  sendAttack(playerIndex, state.lastAttack);
-  message.hidden = true;
+  sendAttack(playerIndex, player.lastAttack);
+  ui.message.hidden = true;
 
-  if (!hasMove(player)) {
-    player.alive = false;
-    showNotice("Game Over", `${player.name} has no legal moves.`);
-  }
-
-  afterMove(playerIndex);
+  if (!hasMove(player)) endMatch(playerIndex === 0 ? 1 : 0, `${player.name} has no legal moves.`);
+  updateStats();
+  renderAllBoards();
   return true;
-}
-
-function afterMove(playerIndex) {
-  updateStats();
-  if (playerIndex === state.activePlayer) renderTiles();
-
-  if (state.mode === "friend") {
-    state.activePlayer = state.activePlayer === 0 ? 1 : 0;
-    showNotice("Turn change", `${state.players[state.activePlayer].name}'s turn.`);
-    updateStats();
-    renderTiles();
-    return;
-  }
-
-  if (state.mode === "cpu" && playerIndex === 0) {
-    state.busy = true;
-    setTimeout(cpuTurn, CPU_DELAY_MS);
-  }
-}
-
-function cpuTurn() {
-  const cpu = state.players[1];
-  expireGarbage(cpu);
-  const direction = chooseCpuDirection(cpu);
-  if (direction) {
-    move(direction, { playerIndex: 1, silent: true, force: true });
-  }
-  state.busy = false;
-  updateStats();
-  renderTiles();
 }
 
 function chooseCpuDirection(player) {
@@ -273,8 +306,7 @@ function chooseCpuDirection(player) {
   for (const direction of DIRECTIONS) {
     const result = slideGrid(player.grid, direction);
     if (!result.changed) continue;
-    const emptyCount = countEmpty(result.grid);
-    const value = result.score * 3 + result.merges * 20 + emptyCount;
+    const value = result.score * 3 + result.merges * 24 + countEmpty(result.grid);
     if (!best || value > best.value) best = { direction, value };
   }
   return best?.direction ?? null;
@@ -289,11 +321,9 @@ function calculateAttack(result) {
 
 function sendAttack(playerIndex, amount) {
   if (!amount || state.mode === "solo") return;
-  const target = state.players[playerIndex === 0 ? 1 : 0];
-  addGarbage(target, amount);
-  if (playerIndex === state.activePlayer) {
-    showNotice("Attack", `Sent ${amount} garbage blocks.`);
-  }
+  const targetIndex = playerIndex === 0 ? 1 : 0;
+  addGarbage(state.players[targetIndex], amount);
+  if (playerIndex === 0) showNotice("Attack", `Sent ${amount} garbage blocks.`);
 }
 
 function slideGrid(grid, direction) {
@@ -419,15 +449,17 @@ function hasMove(player) {
   return false;
 }
 
-function tickGarbage() {
+function tick() {
+  if (!state.matchOver && state.rule === "score" && Date.now() - state.matchStartedAt >= MATCH_DURATION_MS) {
+    const winner = state.players[0].score === state.players[1].score ? -1 : state.players[0].score > state.players[1].score ? 0 : 1;
+    endMatch(winner, "Time is up.");
+  }
+
   let changed = false;
   for (const player of state.players) changed = expireGarbage(player) || changed;
-  if (changed) {
-    updateStats();
-    renderTiles();
-  } else {
-    updateGarbageLabels();
-  }
+  updateStats();
+  if (changed) renderAllBoards();
+  else updateGarbageLabels();
 }
 
 function expireGarbage(player) {
@@ -442,6 +474,14 @@ function expireGarbage(player) {
   return changed;
 }
 
+function endMatch(winnerIndex, reason) {
+  if (state.matchOver) return;
+  state.matchOver = true;
+  clearCpuTimer();
+  const title = winnerIndex < 0 ? "Draw" : `${state.players[winnerIndex].name} wins`;
+  showNotice(title, reason);
+}
+
 function forEachGridCell(grid, callback) {
   for (let x = 0; x < SIZE; x += 1) {
     for (let y = 0; y < SIZE; y += 1) {
@@ -452,28 +492,35 @@ function forEachGridCell(grid, callback) {
   }
 }
 
-function renderTiles(immediate = false) {
-  const player = state.players[state.activePlayer];
+function renderAllBoards(immediate = false) {
+  for (let i = 0; i < state.boards.length; i += 1) {
+    const visible = state.mode !== "solo" || i === 0;
+    document.querySelector(`[data-board-panel="${i}"]`).hidden = !visible;
+    if (visible) renderBoard(state.boards[i], state.players[i], immediate);
+  }
+}
+
+function renderBoard(board, player, immediate = false) {
   const seen = new Set();
   forEachGridCell(player.grid, (x, y, z, cell) => {
     if (!cell) return;
     const key = `${x}-${y}-${z}`;
     seen.add(key);
-    let mesh = tileMeshes.get(key);
+    let mesh = board.tileMeshes.get(key);
     if (!mesh) {
       mesh = makeTile(cell);
       mesh.scale.setScalar(immediate ? 1 : 0.1);
-      tileGroup.add(mesh);
-      tileMeshes.set(key, mesh);
+      board.tileGroup.add(mesh);
+      board.tileMeshes.set(key, mesh);
     }
     updateMeshForCell(mesh, cell);
     mesh.position.copy(cellToWorld(x, y, z));
   });
 
-  for (const [key, mesh] of tileMeshes.entries()) {
+  for (const [key, mesh] of board.tileMeshes.entries()) {
     if (!seen.has(key)) {
-      disposeTile(mesh);
-      tileMeshes.delete(key);
+      disposeTile(board, mesh);
+      board.tileMeshes.delete(key);
     }
   }
 }
@@ -504,21 +551,22 @@ function updateMeshForCell(mesh, cell) {
     const ratio = garbageRatio(cell);
     mesh.material.color.set("#050608");
     mesh.material.opacity = 0.22 + ratio * 0.68;
-    mesh.material.emissive.set("#000000");
   } else {
     mesh.material.color.set(COLORS.get(cell.value) || "#ffffff");
     mesh.material.opacity = 1;
-    mesh.material.emissive.set("#000000");
   }
 }
 
 function updateGarbageLabels() {
-  const player = state.players[state.activePlayer];
-  forEachGridCell(player.grid, (x, y, z, cell) => {
-    if (!cell || cell.kind !== "garbage") return;
-    const mesh = tileMeshes.get(`${x}-${y}-${z}`);
-    if (mesh) updateMeshForCell(mesh, cell);
-  });
+  for (let playerIndex = 0; playerIndex < state.players.length; playerIndex += 1) {
+    const board = state.boards[playerIndex];
+    const player = state.players[playerIndex];
+    forEachGridCell(player.grid, (x, y, z, cell) => {
+      if (!cell || cell.kind !== "garbage") return;
+      const mesh = board.tileMeshes.get(`${x}-${y}-${z}`);
+      if (mesh) updateMeshForCell(mesh, cell);
+    });
+  }
 }
 
 function getCellLabel(cell) {
@@ -547,8 +595,8 @@ function updateTileLabel(mesh, text, cell) {
   mesh.add(makeLabel(text, cell));
 }
 
-function disposeTile(mesh) {
-  tileGroup.remove(mesh);
+function disposeTile(board, mesh) {
+  board.tileGroup.remove(mesh);
   mesh.geometry.dispose();
   mesh.material.dispose();
   disposeLabel(mesh.children[0]);
@@ -580,52 +628,61 @@ function cellToWorld(x, y, z) {
 
 function updateModeText() {
   const captions = {
-    solo: "Solo practice / 4 x 4 x 4 cube",
-    cpu: "CPU practice battle / attacks send garbage",
-    friend: "Friend battle / pass the turn after each move"
+    solo: "Solo practice / one visible board",
+    cpu: "Real-time CPU battle / opponent board is visible",
+    friend: "Local simultaneous friend battle / P1 and P2 controls"
   };
-  modeCaption.textContent = captions[state.mode];
-  p1Label.textContent = state.mode === "friend" ? "P1" : "Player";
-  p2Label.textContent = state.mode === "cpu" ? "CPU" : state.mode === "friend" ? "P2" : "Opponent";
+  ui.caption.textContent = captions[state.mode];
+  ui.labels[0].textContent = state.mode === "friend" ? "P1" : "Player";
+  ui.labels[1].textContent = state.mode === "cpu" ? "CPU" : "P2";
 }
 
 function updateStats() {
-  const current = state.players[state.activePlayer];
-  scoreEl.textContent = current.score.toLocaleString();
-  bestEl.textContent = state.best.toLocaleString();
-  attackEl.textContent = state.lastAttack.toLocaleString();
-  p1Score.textContent = state.players[0].score.toLocaleString();
-  p2Score.textContent = state.players[1].score.toLocaleString();
-  p1Garbage.textContent = `Garbage ${countGarbage(state.players[0])}`;
-  p2Garbage.textContent = `Garbage ${countGarbage(state.players[1])}`;
-  document.querySelectorAll("[data-player-card]").forEach((card) => {
-    card.classList.toggle("is-active", Number(card.dataset.playerCard) === state.activePlayer);
-  });
+  const remaining = Math.max(0, MATCH_DURATION_MS - (Date.now() - state.matchStartedAt));
+  ui.timer.textContent = formatTime(remaining);
+  ui.rule.textContent = state.rule === "ko" ? "KO" : "Score";
+  ui.best.textContent = state.best.toLocaleString();
+  for (let i = 0; i < state.players.length; i += 1) {
+    ui.scores[i].textContent = state.players[i].score.toLocaleString();
+    ui.attacks[i].textContent = `ATK ${state.players[i].lastAttack}`;
+    ui.garbage[i].textContent = `Garbage ${countGarbage(state.players[i])}`;
+  }
+}
+
+function formatTime(ms) {
+  const totalSeconds = Math.ceil(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
 function showNotice(title, body) {
-  messageTitle.textContent = title;
-  messageBody.textContent = body;
-  message.hidden = false;
+  ui.messageTitle.textContent = title;
+  ui.messageBody.textContent = body;
+  ui.message.hidden = false;
 }
 
 function resize() {
-  const rect = canvas.getBoundingClientRect();
-  renderer.setSize(rect.width, rect.height, false);
-  camera.aspect = rect.width / rect.height;
-  camera.updateProjectionMatrix();
+  for (const board of state.boards) {
+    const rect = board.canvas.getBoundingClientRect();
+    board.renderer.setSize(rect.width, rect.height, false);
+    board.camera.aspect = rect.width / rect.height;
+    board.camera.updateProjectionMatrix();
+  }
 }
 
 function animate() {
   requestAnimationFrame(animate);
-  tileGroup.children.forEach((mesh) => {
-    if (mesh.scale.x < 1) {
-      const next = Math.min(1, mesh.scale.x + 0.08);
-      mesh.scale.setScalar(next);
-    }
-    const label = mesh.children[0];
-    if (label) label.quaternion.copy(camera.quaternion);
-  });
-  board.rotation.y = Math.sin(performance.now() / 4200) * 0.04;
-  renderer.render(scene, camera);
+  for (const board of state.boards) {
+    board.tileGroup.children.forEach((mesh) => {
+      if (mesh.scale.x < 1) {
+        const next = Math.min(1, mesh.scale.x + 0.08);
+        mesh.scale.setScalar(next);
+      }
+      const label = mesh.children[0];
+      if (label) label.quaternion.copy(board.camera.quaternion);
+    });
+    board.boardGroup.rotation.y = Math.sin((performance.now() + board.index * 700) / 4200) * 0.04;
+    board.renderer.render(board.scene, board.camera);
+  }
 }

@@ -1,75 +1,66 @@
-# 3D 2048 Prototype
+# 3D 2048 Battle Prototype
 
-3次元版2048の初期プロトタイプです。4 x 4 x 4 の立方体ボードを斜め視点で表示し、上下左右、奥、手前の6方向へ一斉移動できます。
+This is a browser prototype for a 3D version of 2048. The board is a 4 x 4 x 4 cube, and tiles can move in six directions: up, down, left, right, back, and front.
 
-## 遊び方
-
-- `W` / `↑`: 上へ
-- `S` / `↓`: 下へ
-- `A` / `←`: 左へ
-- `D` / `→`: 右へ
-- `Q`: 奥へ
-- `E`: 手前へ
-- 画面下のボタンでも操作できます。
-
-## ローカル確認
+## Run Locally
 
 ```powershell
 python -m http.server 8000
 ```
 
-ブラウザで `http://localhost:8000` を開きます。ビルド工程は不要です。
+Then open `http://localhost:8000`.
 
-## 無料公開の候補
+## Controls
 
-最初は静的サイトとして公開するのが一番安く、運用も軽いです。
+P1 / player:
 
-- GitHub Pages: リポジトリだけで公開できる。個人制作の初期版に向く。
-- Cloudflare Pages: 無料枠が広く、表示も速い。将来オンライン対戦のAPIを足す時もCloudflare Workersへ拡張しやすい。
-- Netlify: 設定が簡単。プレビュー公開もしやすい。
+- `W` / `ArrowUp`: up
+- `S` / `ArrowDown`: down
+- `A` / `ArrowLeft`: left
+- `D` / `ArrowRight`: right
+- `Q`: back
+- `E`: front
+- Touch buttons also control P1.
 
-おすすめは、初期公開なら GitHub Pages、将来の対戦サーバーまで見据えるなら Cloudflare Pages です。
+P2 local friend mode:
 
-## 対戦化ロードマップ
+- `I`: up
+- `K`: down
+- `J`: left
+- `L`: right
+- `U`: back
+- `O`: front
 
-1. 一人用の完成度を上げる
-   - ゲームオーバー演出
-   - 盤面サイズ変更
-   - スマホの操作感調整
-   - スコア演出と合体アニメーション
+## Modes
 
-2. 攻撃ルールを決める
-   - 1手で複数合体した数をコンボ扱いにする
-   - 大きい数字の合体ほど攻撃力を上げる
-   - 連続ターンで合体が続いたらボーナスを加える
+- `Solo`: one visible board for practice.
+- `CPU`: the player and CPU play at the same time. The CPU board is visible beside the player board.
+- `Friend`: local simultaneous two-player mode. P1 and P2 can both move independently with separate keys.
 
-3. お邪魔ブロックを入れる
-   - お邪魔は一定ターン、または一定秒数で消える
-   - コンボが大きい時は個数を増やすか、消えるまでの時間を伸ばす
-   - お邪魔は合体不可にして、移動だけは通常ブロックと同じにする
+## Battle Rules
 
-4. CPU戦を作る
-   - まずはランダム合法手
-   - 次に「空きマス」「合体可能数」「最大タイル位置」を評価する簡易AI
-   - 難易度ごとに読み手数を変える
+- Both players play in real time, not by turns.
+- Merges create attack power.
+- Attack power sends black garbage blocks to the opponent board.
+- Garbage blocks cannot merge.
+- Garbage blocks show remaining seconds and fade out as they approach expiration.
+- `Knockout`: a player loses when no legal move remains.
+- `Score Limit`: when the timer reaches zero, the higher score wins.
 
-5. オンライン対戦を作る
-   - クライアントは静的サイトのまま
-   - 対戦の同期だけサーバー、またはWebSocketで管理
-   - 最初はフレンド対戦、次にCPU代替やランダムマッチへ拡張
+## Publish Options
 
-## 実装メモ
+This is currently a static site, so the cheapest publishing options are:
 
-- `index.html`: 画面構造
-- `styles.css`: レスポンシブUI
-- `game.js`: 盤面ロジックとThree.js描画
+- GitHub Pages: simplest for a prototype.
+- Cloudflare Pages: good if the project later adds WebSocket matchmaking or Workers.
+- Netlify: easy previews and simple static hosting.
 
-今は一人用の盤面処理と描画を同じファイルに置いています。対戦を入れる段階で、盤面ロジック、入力、描画、対戦同期を分割すると拡張しやすくなります。
+For online friend battles, Cloudflare Pages plus a small WebSocket backend is a good next step.
 
-## Current battle prototype
+## Implementation Notes
 
-- `Solo`: normal practice mode.
-- `CPU`: the player moves, then a simple evaluation AI chooses the CPU move.
-- `Friend`: local pass-and-play battle. P1 and P2 alternate turns on one device.
-- Garbage blocks are black, cannot merge, show a remaining-seconds label, and fade out until they disappear.
-- Multiple merges in one move create attack power. In battle modes, attack power adds garbage blocks to the opponent board.
+- `index.html`: UI layout.
+- `styles.css`: responsive battle layout.
+- `game.js`: board logic, battle rules, CPU movement, garbage blocks, and Three.js rendering.
+
+The current friend mode is local simultaneous play. Online friend battles can reuse the same two-board state model and replace P2 keyboard input with network messages.
