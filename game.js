@@ -177,6 +177,10 @@ function newGame() {
   updateModeText();
   updateStats();
   renderAllBoards(true);
+  requestAnimationFrame(() => {
+    resize();
+    renderAllBoards(true);
+  });
   if (state.mode === "cpu") startCpuTimer();
 }
 
@@ -496,7 +500,10 @@ function renderAllBoards(immediate = false) {
   for (let i = 0; i < state.boards.length; i += 1) {
     const visible = state.mode !== "solo" || i === 0;
     document.querySelector(`[data-board-panel="${i}"]`).hidden = !visible;
-    if (visible) renderBoard(state.boards[i], state.players[i], immediate);
+    if (visible) {
+      resizeBoard(state.boards[i]);
+      renderBoard(state.boards[i], state.players[i], immediate);
+    }
   }
 }
 
@@ -664,11 +671,16 @@ function showNotice(title, body) {
 
 function resize() {
   for (const board of state.boards) {
-    const rect = board.canvas.getBoundingClientRect();
-    board.renderer.setSize(rect.width, rect.height, false);
-    board.camera.aspect = rect.width / rect.height;
-    board.camera.updateProjectionMatrix();
+    resizeBoard(board);
   }
+}
+
+function resizeBoard(board) {
+  const rect = board.canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;
+  board.renderer.setSize(rect.width, rect.height, false);
+  board.camera.aspect = rect.width / rect.height;
+  board.camera.updateProjectionMatrix();
 }
 
 function animate() {
