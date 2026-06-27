@@ -114,7 +114,9 @@ function createBoard(canvas, index) {
     camera,
     boardGroup,
     tileGroup,
-    tileMeshes: new Map()
+    tileMeshes: new Map(),
+    lastWidth: 0,
+    lastHeight: 0
   };
 }
 
@@ -498,12 +500,10 @@ function forEachGridCell(grid, callback) {
 
 function renderAllBoards(immediate = false) {
   for (let i = 0; i < state.boards.length; i += 1) {
-    const visible = state.mode !== "solo" || i === 0;
-    document.querySelector(`[data-board-panel="${i}"]`).hidden = !visible;
-    if (visible) {
-      resizeBoard(state.boards[i]);
-      renderBoard(state.boards[i], state.players[i], immediate);
-    }
+    const panel = document.querySelector(`[data-board-panel="${i}"]`);
+    panel.classList.toggle("is-inactive", state.mode === "solo" && i === 1);
+    resizeBoard(state.boards[i]);
+    renderBoard(state.boards[i], state.players[i], immediate);
   }
 }
 
@@ -678,7 +678,12 @@ function resize() {
 function resizeBoard(board) {
   const rect = board.canvas.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return;
-  board.renderer.setSize(rect.width, rect.height, false);
+  const width = Math.max(1, Math.round(rect.width));
+  const height = Math.max(1, Math.round(rect.height));
+  if (board.lastWidth === width && board.lastHeight === height) return;
+  board.lastWidth = width;
+  board.lastHeight = height;
+  board.renderer.setSize(width, height, false);
   board.camera.aspect = rect.width / rect.height;
   board.camera.updateProjectionMatrix();
 }
@@ -686,6 +691,7 @@ function resizeBoard(board) {
 function animate() {
   requestAnimationFrame(animate);
   for (const board of state.boards) {
+    resizeBoard(board);
     board.tileGroup.children.forEach((mesh) => {
       if (mesh.scale.x < 1) {
         const next = Math.min(1, mesh.scale.x + 0.08);

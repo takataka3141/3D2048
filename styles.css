@@ -159,6 +159,14 @@ h2 {
   min-width: 0;
 }
 
+.board-panel.is-inactive {
+  opacity: 0.48;
+}
+
+.board-panel.is-inactive .stage-wrap {
+  filter: grayscale(0.35);
+}
+
 .board-header {
   display: flex;
   align-items: center;
