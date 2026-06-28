@@ -45,7 +45,8 @@ const state = {
   players: [makePlayer("Player"), makePlayer("Opponent")],
   boards: [],
   best: Number(localStorage.getItem("3d2048-best") || 0),
-  matchStartedAt: Date.now(),
+  matchStartedAt: null,
+  matchActive: false,
   matchOver: false,
   cpuTimer: null,
   online: {
@@ -181,7 +182,8 @@ function newGame() {
     makePlayer(getPlayerName(0)),
     makePlayer(getPlayerName(1))
   ];
-  state.matchStartedAt = Date.now();
+  state.matchStartedAt = null;
+  state.matchActive = false;
   state.matchOver = false;
   ui.message.hidden = true;
 
@@ -196,7 +198,6 @@ function newGame() {
     resize();
     renderAllBoards(true);
   });
-  if (state.mode === "cpu") startCpuTimer();
   if (state.mode === "online" && state.online.connected) sendOnlineState();
 }
 
@@ -312,6 +313,11 @@ function move(playerIndex, direction, options = {}) {
   if (state.mode === "solo" && playerIndex !== 0) return false;
   if (state.mode === "cpu" && playerIndex === 1 && !options.silent) return false;
   if (state.mode === "online" && playerIndex !== state.online.localPlayerIndex && !options.remote) return false;
+  if (state.mode === "online" && !state.matchActive && !options.remote) {
+    showNotice("Waiting", "Online battle starts after both players connect.");
+    return false;
+  }
+  if (!state.matchActive) startMatch();
 
   const player = state.players[playerIndex];
   expireGarbage(player);
@@ -489,7 +495,12 @@ function hasMove(player) {
 }
 
 function tick() {
-  if (!state.matchOver && state.rule === "score" && Date.now() - state.matchStartedAt >= MATCH_DURATION_MS) {
+  if (
+    state.matchActive &&
+    !state.matchOver &&
+    state.rule === "score" &&
+    Date.now() - state.matchStartedAt >= MATCH_DURATION_MS
+  ) {
     const winner = state.players[0].score === state.players[1].score ? -1 : state.players[0].score > state.players[1].score ? 0 : 1;
     endMatch(winner, "Time is up.");
   }
@@ -521,6 +532,18 @@ function endMatch(winnerIndex, reason) {
   showNotice(title, reason);
   if (state.mode === "online" && !state.online.suppressSend) {
     sendOnline({ type: "match-over", winnerIndex, reason });
+  }
+}
+
+function startMatch(startedAt = Date.now(), options = {}) {
+  if (state.matchActive) return;
+  state.matchStartedAt = startedAt;
+  state.matchActive = true;
+  if (state.mode === "cpu") startCpuTimer();
+  updateStats();
+  if (state.mode === "online" && !options.remote) {
+    sendOnline({ type: "match-start", startedAt, rule: state.rule });
+    sendOnlineState();
   }
 }
 
@@ -683,7 +706,8 @@ function updateModeText() {
 }
 
 function updateStats() {
-  const remaining = Math.max(0, MATCH_DURATION_MS - (Date.now() - state.matchStartedAt));
+  const elapsed = state.matchActive && state.matchStartedAt ? Date.now() - state.matchStartedAt : 0;
+  const remaining = Math.max(0, MATCH_DURATION_MS - elapsed);
   ui.timer.textContent = formatTime(remaining);
   ui.rule.textContent = state.rule === "ko" ? "KO" : "Score";
   ui.best.textContent = state.best.toLocaleString();
@@ -729,7 +753,6 @@ function connectOnline(role) {
     socket.addEventListener("open", () => {
       state.online.connected = true;
       sendOnline({ type: "join", room, role });
-      sendOnlineState();
       updateOnlineStatus("Waiting");
     });
     socket.addEventListener("message", (event) => handleOnlineMessage(event.data));
@@ -767,6 +790,7 @@ function sendOnlineState() {
     playerIndex,
     player: serializePlayer(state.players[playerIndex]),
     matchStartedAt: state.matchStartedAt,
+    matchActive: state.matchActive,
     rule: state.rule
   });
 }
@@ -779,7 +803,11 @@ function handleOnlineMessage(raw) {
     return;
   }
   if (message.type === "peer-count") {
-    updateOnlineStatus(message.count >= 2 ? "Connected" : "Waiting");
+    const ready = message.count >= 2;
+    updateOnlineStatus(ready ? "Connected" : "Waiting");
+    if (ready && state.online.role === "host" && !state.matchActive) {
+      startMatch(Date.now());
+    }
     return;
   }
   if (message.type === "error") {
@@ -792,7 +820,9 @@ function handleOnlineMessage(raw) {
     if (remoteIndex === state.online.localPlayerIndex) return;
     state.players[remoteIndex] = deserializePlayer(message.player);
     if (message.rule) state.rule = message.rule;
-    if (message.matchStartedAt && state.online.role === "join") state.matchStartedAt = message.matchStartedAt;
+    if (message.matchActive && message.matchStartedAt && !state.matchActive) {
+      startMatch(message.matchStartedAt, { remote: true });
+    }
     state.best = Math.max(state.best, state.players[remoteIndex].score);
     updateStats();
     renderAllBoards();
@@ -803,6 +833,12 @@ function handleOnlineMessage(raw) {
     updateStats();
     renderAllBoards();
     sendOnlineState();
+    return;
+  }
+  if (message.type === "match-start") {
+    if (message.rule) state.rule = message.rule;
+    startMatch(message.startedAt || Date.now(), { remote: true });
+    updateOnlineStatus("Connected");
     return;
   }
   if (message.type === "match-over") {
