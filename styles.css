@@ -142,11 +142,50 @@ h2 {
 }
 
 .mode-bar {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .rule-bar {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.online-panel {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) minmax(150px, 1fr) auto auto minmax(100px, auto);
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(32, 40, 50, 0.58);
+}
+
+.online-panel label {
+  display: grid;
+  gap: 4px;
+  color: #9ba8b5;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+}
+
+.online-panel input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #101820;
+  color: #eef2f6;
+  font: inherit;
+  padding: 0 10px;
+}
+
+#online-status {
+  color: #c8d1da;
+  font-weight: 700;
+  min-height: 44px;
+  display: grid;
+  align-items: center;
 }
 
 .arena {
@@ -313,7 +352,8 @@ li {
   .stats,
   .actions,
   .mode-bar,
-  .rule-bar {
+  .rule-bar,
+  .online-panel {
     grid-template-columns: 1fr;
   }
 

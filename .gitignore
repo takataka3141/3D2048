@@ -1,2 +1,4 @@
 .server.pid
 .server-*.log
+.room-server.pid
+.room-*.log

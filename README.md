@@ -36,6 +36,7 @@ P2 local friend mode:
 - `Solo`: one visible board for practice.
 - `CPU`: the player and CPU play at the same time. The CPU board is visible beside the player board.
 - `Friend`: local simultaneous two-player mode. P1 and P2 can both move independently with separate keys.
+- `Online`: two devices connect to the same passphrase room through a WebSocket room server.
 
 ## Battle Rules
 
@@ -56,6 +57,22 @@ This is currently a static site, so the cheapest publishing options are:
 - Netlify: easy previews and simple static hosting.
 
 For online friend battles, Cloudflare Pages plus a small WebSocket backend is a good next step.
+
+## Online Friend Battle
+
+Start the room server:
+
+```powershell
+node server.js
+```
+
+Then open the game on two devices that can reach that server.
+
+1. On the first device, choose `Online`, enter a passphrase, and press `Host`.
+2. On the second device, choose `Online`, enter the same passphrase, and press `Join`.
+3. Both players use the normal P1 controls on their own device.
+
+For local testing on one PC, use `ws://localhost:8787`. For phones or another PC on the same Wi-Fi, replace `localhost` with the host PC's LAN IP, for example `ws://192.168.1.20:8787`.
 
 ## Implementation Notes
 

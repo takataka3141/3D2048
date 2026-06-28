@@ -31,7 +31,12 @@ const ui = {
   labels: [document.querySelector("#p1-label"), document.querySelector("#p2-label")],
   scores: [document.querySelector("#p1-score"), document.querySelector("#p2-score")],
   attacks: [document.querySelector("#p1-attack"), document.querySelector("#p2-attack")],
-  garbage: [document.querySelector("#p1-garbage"), document.querySelector("#p2-garbage")]
+  garbage: [document.querySelector("#p1-garbage"), document.querySelector("#p2-garbage")],
+  onlineServer: document.querySelector("#online-server"),
+  onlineRoom: document.querySelector("#online-room"),
+  onlineHost: document.querySelector("#online-host"),
+  onlineJoin: document.querySelector("#online-join"),
+  onlineStatus: document.querySelector("#online-status")
 };
 
 const state = {
@@ -42,7 +47,14 @@ const state = {
   best: Number(localStorage.getItem("3d2048-best") || 0),
   matchStartedAt: Date.now(),
   matchOver: false,
-  cpuTimer: null
+  cpuTimer: null,
+  online: {
+    socket: null,
+    role: null,
+    localPlayerIndex: 0,
+    connected: false,
+    suppressSend: false
+  }
 };
 
 state.boards = [
@@ -165,8 +177,8 @@ function resetCamera(camera) {
 function newGame() {
   clearCpuTimer();
   state.players = [
-    makePlayer("Player"),
-    makePlayer(state.mode === "cpu" ? "CPU" : "P2")
+    makePlayer(getPlayerName(0)),
+    makePlayer(getPlayerName(1))
   ];
   state.matchStartedAt = Date.now();
   state.matchOver = false;
@@ -184,15 +196,17 @@ function newGame() {
     renderAllBoards(true);
   });
   if (state.mode === "cpu") startCpuTimer();
+  if (state.mode === "online" && state.online.connected) sendOnlineState();
 }
 
 function bindEvents() {
   document.querySelectorAll("[data-dir]").forEach((button) => {
-    button.addEventListener("click", () => move(0, button.dataset.dir));
+    button.addEventListener("click", () => move(getLocalPlayerIndex(), button.dataset.dir));
   });
   document.querySelectorAll("[data-mode]").forEach((button) => {
     button.addEventListener("click", () => {
       state.mode = button.dataset.mode;
+      if (state.mode !== "online") disconnectOnline();
       document.querySelectorAll("[data-mode]").forEach((modeButton) => {
         modeButton.classList.toggle("is-active", modeButton === button);
       });
@@ -218,6 +232,8 @@ function bindEvents() {
   document.querySelector("#undo-view").addEventListener("click", () => {
     for (const board of state.boards) resetCamera(board.camera);
   });
+  ui.onlineHost.addEventListener("click", () => connectOnline("host"));
+  ui.onlineJoin.addEventListener("click", () => connectOnline("join"));
   addEventListener("keydown", handleKeydown);
   addEventListener("resize", resize);
 }
@@ -257,11 +273,22 @@ function handleKeydown(event) {
   };
   if (playerOneKeys[event.key]) {
     event.preventDefault();
-    move(0, playerOneKeys[event.key]);
+    move(getLocalPlayerIndex(), playerOneKeys[event.key]);
   } else if (state.mode === "friend" && playerTwoKeys[event.key]) {
     event.preventDefault();
     move(1, playerTwoKeys[event.key]);
   }
+}
+
+function getPlayerName(index) {
+  if (state.mode === "cpu") return index === 0 ? "Player" : "CPU";
+  if (state.mode === "friend") return index === 0 ? "P1" : "P2";
+  if (state.mode === "online") return index === 0 ? "Host" : "Guest";
+  return index === 0 ? "Player" : "P2";
+}
+
+function getLocalPlayerIndex() {
+  return state.mode === "online" ? state.online.localPlayerIndex : 0;
 }
 
 function startCpuTimer() {
@@ -283,6 +310,7 @@ function move(playerIndex, direction, options = {}) {
   if (state.matchOver) return false;
   if (state.mode === "solo" && playerIndex !== 0) return false;
   if (state.mode === "cpu" && playerIndex === 1 && !options.silent) return false;
+  if (state.mode === "online" && playerIndex !== state.online.localPlayerIndex && !options.remote) return false;
 
   const player = state.players[playerIndex];
   expireGarbage(player);
@@ -304,6 +332,7 @@ function move(playerIndex, direction, options = {}) {
   if (!hasMove(player)) endMatch(playerIndex === 0 ? 1 : 0, `${player.name} has no legal moves.`);
   updateStats();
   renderAllBoards();
+  if (state.mode === "online" && !options.remote) sendOnlineState();
   return true;
 }
 
@@ -330,6 +359,9 @@ function sendAttack(playerIndex, amount) {
   const targetIndex = playerIndex === 0 ? 1 : 0;
   addGarbage(state.players[targetIndex], amount);
   if (playerIndex === 0) showNotice("Attack", `Sent ${amount} garbage blocks.`);
+  if (state.mode === "online" && playerIndex === state.online.localPlayerIndex) {
+    sendOnline({ type: "garbage", amount });
+  }
 }
 
 function slideGrid(grid, direction) {
@@ -486,6 +518,9 @@ function endMatch(winnerIndex, reason) {
   clearCpuTimer();
   const title = winnerIndex < 0 ? "Draw" : `${state.players[winnerIndex].name} wins`;
   showNotice(title, reason);
+  if (state.mode === "online" && !state.online.suppressSend) {
+    sendOnline({ type: "match-over", winnerIndex, reason });
+  }
 }
 
 function forEachGridCell(grid, callback) {
@@ -637,11 +672,13 @@ function updateModeText() {
   const captions = {
     solo: "Solo practice / one visible board",
     cpu: "Real-time CPU battle / opponent board is visible",
-    friend: "Local simultaneous friend battle / P1 and P2 controls"
+    friend: "Local simultaneous friend battle / P1 and P2 controls",
+    online: "Online friend battle / passphrase room"
   };
   ui.caption.textContent = captions[state.mode];
-  ui.labels[0].textContent = state.mode === "friend" ? "P1" : "Player";
-  ui.labels[1].textContent = state.mode === "cpu" ? "CPU" : "P2";
+  ui.labels[0].textContent = getPlayerName(0);
+  ui.labels[1].textContent = getPlayerName(1);
+  updateOnlineStatus();
 }
 
 function updateStats() {
@@ -667,6 +704,133 @@ function showNotice(title, body) {
   ui.messageTitle.textContent = title;
   ui.messageBody.textContent = body;
   ui.message.hidden = false;
+}
+
+function connectOnline(role) {
+  const serverUrl = ui.onlineServer.value.trim();
+  const room = ui.onlineRoom.value.trim();
+  if (!serverUrl || !room) {
+    showNotice("Online", "Enter a server URL and passphrase.");
+    return;
+  }
+  disconnectOnline();
+  state.mode = "online";
+  state.online.role = role;
+  state.online.localPlayerIndex = role === "host" ? 0 : 1;
+  document.querySelectorAll("[data-mode]").forEach((modeButton) => {
+    modeButton.classList.toggle("is-active", modeButton.dataset.mode === "online");
+  });
+  newGame();
+  try {
+    const socket = new WebSocket(serverUrl);
+    state.online.socket = socket;
+    updateOnlineStatus("Connecting");
+    socket.addEventListener("open", () => {
+      state.online.connected = true;
+      sendOnline({ type: "join", room, role });
+      sendOnlineState();
+      updateOnlineStatus("Waiting");
+    });
+    socket.addEventListener("message", (event) => handleOnlineMessage(event.data));
+    socket.addEventListener("close", () => {
+      state.online.connected = false;
+      updateOnlineStatus("Offline");
+    });
+    socket.addEventListener("error", () => updateOnlineStatus("Error"));
+  } catch {
+    updateOnlineStatus("Error");
+  }
+}
+
+function disconnectOnline() {
+  if (state.online.socket) state.online.socket.close();
+  state.online.socket = null;
+  state.online.connected = false;
+}
+
+function sendOnline(payload) {
+  const socket = state.online.socket;
+  if (!socket || socket.readyState !== WebSocket.OPEN) return;
+  socket.send(JSON.stringify(payload));
+}
+
+function sendOnlineState() {
+  if (state.online.suppressSend) return;
+  const playerIndex = state.online.localPlayerIndex;
+  sendOnline({
+    type: "state",
+    playerIndex,
+    player: serializePlayer(state.players[playerIndex]),
+    matchStartedAt: state.matchStartedAt,
+    rule: state.rule
+  });
+}
+
+function handleOnlineMessage(raw) {
+  let message;
+  try {
+    message = JSON.parse(raw);
+  } catch {
+    return;
+  }
+  if (message.type === "peer-count") {
+    updateOnlineStatus(message.count >= 2 ? "Connected" : "Waiting");
+    return;
+  }
+  if (message.type === "error") {
+    updateOnlineStatus("Error");
+    showNotice("Online error", message.message || "Connection error.");
+    return;
+  }
+  if (message.type === "state" && Number.isInteger(message.playerIndex)) {
+    const remoteIndex = message.playerIndex;
+    if (remoteIndex === state.online.localPlayerIndex) return;
+    state.players[remoteIndex] = deserializePlayer(message.player);
+    if (message.rule) state.rule = message.rule;
+    if (message.matchStartedAt && state.online.role === "join") state.matchStartedAt = message.matchStartedAt;
+    state.best = Math.max(state.best, state.players[remoteIndex].score);
+    updateStats();
+    renderAllBoards();
+    return;
+  }
+  if (message.type === "garbage") {
+    addGarbage(state.players[state.online.localPlayerIndex], Number(message.amount) || 0);
+    updateStats();
+    renderAllBoards();
+    sendOnlineState();
+    return;
+  }
+  if (message.type === "match-over") {
+    state.online.suppressSend = true;
+    endMatch(message.winnerIndex, message.reason || "Remote match ended.");
+    state.online.suppressSend = false;
+  }
+}
+
+function serializePlayer(player) {
+  return {
+    name: player.name,
+    score: player.score,
+    lastAttack: player.lastAttack,
+    alive: player.alive,
+    grid: player.grid
+  };
+}
+
+function deserializePlayer(player) {
+  return {
+    name: player?.name || "Remote",
+    score: Number(player?.score) || 0,
+    lastAttack: Number(player?.lastAttack) || 0,
+    alive: player?.alive !== false,
+    grid: player?.grid || createGrid()
+  };
+}
+
+function updateOnlineStatus(label) {
+  const role = state.online.role ? state.online.role.toUpperCase() : "OFF";
+  const status = label || (state.online.connected ? "Connected" : "Offline");
+  ui.onlineStatus.textContent = `${status} / ${role}`;
 }
 
 function resize() {

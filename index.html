@@ -34,6 +34,21 @@
           <button class="mode-button is-active" type="button" data-mode="solo">Solo</button>
           <button class="mode-button" type="button" data-mode="cpu">CPU</button>
           <button class="mode-button" type="button" data-mode="friend">Friend</button>
+          <button class="mode-button" type="button" data-mode="online">Online</button>
+        </div>
+
+        <div class="online-panel" aria-label="online friend battle">
+          <label>
+            Server
+            <input id="online-server" type="url" value="ws://localhost:8787" autocomplete="off">
+          </label>
+          <label>
+            Passphrase
+            <input id="online-room" type="text" placeholder="example: cube-2048" autocomplete="off">
+          </label>
+          <button id="online-host" type="button">Host</button>
+          <button id="online-join" type="button">Join</button>
+          <span id="online-status">Offline</span>
         </div>
 
         <div class="rule-bar" aria-label="win condition">
@@ -83,7 +98,7 @@
         <div class="controls" aria-label="player controls">
           <div>
             <h2>P1</h2>
-            <p>WASD / Q E, arrow keys, buttons</p>
+            <p>WASD / Q E, arrow keys, buttons. Online uses these for your board.</p>
           </div>
           <div class="touch-controls" aria-label="touch move controls">
             <button type="button" data-dir="y+">Up</button>
@@ -123,7 +138,7 @@
         </section>
         <section>
           <h2>Friend</h2>
-          <p>This prototype supports local simultaneous controls. Online friend battles can reuse the same two-board state and replace P2 input with WebSocket messages.</p>
+          <p>Local friend mode supports simultaneous controls. Online friend mode uses a passphrase room: one player hosts, the other joins.</p>
         </section>
       </aside>
     </main>
