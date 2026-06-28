@@ -64,6 +64,7 @@ state.boards = [
 
 newGame();
 bindEvents();
+setDefaultOnlineServer();
 resize();
 animate();
 setInterval(tick, 250);
@@ -736,9 +737,13 @@ function connectOnline(role) {
       state.online.connected = false;
       updateOnlineStatus("Offline");
     });
-    socket.addEventListener("error", () => updateOnlineStatus("Error"));
+    socket.addEventListener("error", () => {
+      updateOnlineStatus("Error");
+      showNotice("Online error", getOnlineConnectionHint(serverUrl));
+    });
   } catch {
     updateOnlineStatus("Error");
+    showNotice("Online error", getOnlineConnectionHint(serverUrl));
   }
 }
 
@@ -831,6 +836,25 @@ function updateOnlineStatus(label) {
   const role = state.online.role ? state.online.role.toUpperCase() : "OFF";
   const status = label || (state.online.connected ? "Connected" : "Offline");
   ui.onlineStatus.textContent = `${status} / ${role}`;
+}
+
+function setDefaultOnlineServer() {
+  if (!ui.onlineServer || ui.onlineServer.dataset.autofilled === "true") return;
+  const host = location.hostname;
+  if (!host) return;
+  const protocol = location.protocol === "https:" ? "wss" : "ws";
+  ui.onlineServer.value = `${protocol}://${host}:8787`;
+  ui.onlineServer.dataset.autofilled = "true";
+}
+
+function getOnlineConnectionHint(serverUrl) {
+  if (serverUrl.includes("localhost") || serverUrl.includes("127.0.0.1")) {
+    return "On a phone, localhost means the phone itself. Use the host PC LAN IP, for example ws://192.168.1.20:8787.";
+  }
+  if (location.protocol === "https:" && serverUrl.startsWith("ws://")) {
+    return "This page is HTTPS, so the browser may block ws://. Use a wss:// server, or open the game over http:// on the same LAN.";
+  }
+  return "Could not connect. Check that node server.js is running, the phone is on the same Wi-Fi, and Windows Firewall allows Node.js on private networks.";
 }
 
 function resize() {

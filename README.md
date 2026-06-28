@@ -74,6 +74,15 @@ Then open the game on two devices that can reach that server.
 
 For local testing on one PC, use `ws://localhost:8787`. For phones or another PC on the same Wi-Fi, replace `localhost` with the host PC's LAN IP, for example `ws://192.168.1.20:8787`.
 
+### Phone troubleshooting
+
+- `localhost` on a phone means the phone itself, not the PC. Use the PC's LAN IP.
+- Open the game page from the same PC IP too, for example `http://192.168.1.20:8000`.
+- Run `node server.js` on the PC before connecting.
+- Allow Node.js through Windows Firewall for private networks when Windows asks.
+- If the game is opened from an HTTPS hosting service, browsers may block `ws://` as mixed content. Use a `wss://` server for public HTTPS hosting, or test over local `http://`.
+- Make sure the phone and PC are on the same Wi-Fi and that guest/client isolation is off on the router.
+
 ## Implementation Notes
 
 - `index.html`: UI layout.
